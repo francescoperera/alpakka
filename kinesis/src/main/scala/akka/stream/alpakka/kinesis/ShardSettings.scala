@@ -4,7 +4,7 @@
 
 package akka.stream.alpakka.kinesis
 
-import com.amazonaws.services.kinesis.model.ShardIteratorType
+import software.amazon.awssdk.services.kinesis.model.ShardIteratorType
 
 import scala.concurrent.duration._
 import akka.util.JavaDurationConverters._
@@ -12,7 +12,7 @@ import akka.util.JavaDurationConverters._
 final class ShardSettings private (
     val streamName: String,
     val shardId: String,
-    val shardIteratorType: com.amazonaws.services.kinesis.model.ShardIteratorType,
+    val shardIteratorType: software.amazon.awssdk.services.kinesis.model.ShardIteratorType,
     val startingSequenceNumber: Option[String],
     val atTimestamp: Option[java.time.Instant],
     val refreshInterval: scala.concurrent.duration.FiniteDuration,
@@ -61,7 +61,7 @@ final class ShardSettings private (
   /**
    * Sets `shardIteratorType` to `AT_TIMESTAMP` and uses the given `Instant` as starting timestamp.
    */
-  def withAtTimestamp(value: java.time.Instant): ShardSettings =
+  def withAttimestamp(value: java.time.Instant): ShardSettings =
     copy(shardIteratorType = ShardIteratorType.AT_TIMESTAMP, atTimestamp = Option(value))
 
   /** Scala API */
@@ -75,7 +75,7 @@ final class ShardSettings private (
   private def copy(
       streamName: String = streamName,
       shardId: String = shardId,
-      shardIteratorType: com.amazonaws.services.kinesis.model.ShardIteratorType = shardIteratorType,
+      shardIteratorType: software.amazon.awssdk.services.kinesis.model.ShardIteratorType = shardIteratorType,
       startingSequenceNumber: Option[String] = startingSequenceNumber,
       atTimestamp: Option[java.time.Instant] = atTimestamp,
       refreshInterval: scala.concurrent.duration.FiniteDuration = refreshInterval,

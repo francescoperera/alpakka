@@ -260,6 +260,11 @@ object Dependencies {
 
   val Kinesis = Seq(
     libraryDependencies ++= Seq(
+      "com.github.matsluni" %% "aws-spi-akka-http" % "0.0.4" excludeAll ExclusionRule(
+        organization = "com.typesafe.akka"
+      ), // ApacheV2
+      "software.amazon.awssdk" % "kinesis" % AwsSdk2Version , // ApacheV2
+      "com.typesafe.akka" %% "akka-http" % AkkaHttpVersion, // ApacheV2
       "com.amazonaws" % "aws-java-sdk-kinesis" % AwsSdkVersion, // ApacheV2
       "org.mockito" % "mockito-core" % "2.23.4" % Test // MIT
     )

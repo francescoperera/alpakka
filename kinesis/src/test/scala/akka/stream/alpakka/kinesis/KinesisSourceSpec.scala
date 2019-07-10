@@ -5,27 +5,28 @@
 package akka.stream.alpakka.kinesis
 
 import java.util
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.{CompletableFuture, TimeUnit}
 import java.util.concurrent.atomic.AtomicReference
 
 import akka.stream.alpakka.kinesis.scaladsl.KinesisSource
-import akka.stream.testkit.scaladsl.TestSink
 import akka.stream.testkit.scaladsl.StreamTestKit.assertAllStagesStopped
-import akka.util.ByteString
-import com.amazonaws.handlers.AsyncHandler
-import com.amazonaws.services.kinesis.model._
+import akka.stream.testkit.scaladsl.TestSink
 import org.mockito.ArgumentMatchers._
+import org.mockito.Mockito
 import org.mockito.Mockito._
 import org.mockito.invocation.InvocationOnMock
-import org.mockito.stubbing.Answer
+import org.mockito.stubbing.{Answer, Stubber}
+import org.scalatest.mockito.MockitoSugar
 import org.scalatest.{Matchers, WordSpecLike}
+import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.services.kinesis.model._
 
-import scala.concurrent.duration._
+import scala.concurrent.duration.FiniteDuration
 
 class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
 
   implicit class recordToString(r: Record) {
-    def utf8String: String = ByteString(r.getData).utf8String
+    def utf8String: String = r.data.asUtf8String()
   }
 
   "KinesisSource" must {
@@ -33,17 +34,16 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
     val shardSettings =
       ShardSettings("stream_name", "shard-id")
         .withShardIteratorType(ShardIteratorType.TRIM_HORIZON)
-
     "poll for records" in assertAllStagesStopped {
-      new KinesisSpecContext with WithGetShardIteratorSuccess with WithGetRecordsSuccess {
-        override def shards: util.List[Shard] = util.Arrays.asList(new Shard().withShardId("id"))
+      new KinesisSpecContext with WithGetShardIteratorSuccess with WithGetRecordsSuccess with MockitoHelper {
+        override def shards: util.List[Shard] = util.Arrays.asList(Shard.builder().shardId("id").build())
 
         override def records = util.Arrays.asList(
-          new Record().withData(ByteString("1").toByteBuffer),
-          new Record().withData(ByteString("2").toByteBuffer)
+          Record.builder().data(SdkBytes.fromUtf8String("1")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("2")).build(),
         )
 
-        val probe = KinesisSource.basic(shardSettings, amazonKinesisAsync).runWith(TestSink.probe)
+        val probe = KinesisSource.basic(shardSettings, kinesisAsyncClient).runWith(TestSink.probe)
 
         probe.requestNext.utf8String shouldEqual "1"
         probe.requestNext.utf8String shouldEqual "2"
@@ -53,43 +53,43 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
       }
     }
 
-    "poll for records with mutliple requests" in assertAllStagesStopped {
+    "poll for records with multiple requests" in assertAllStagesStopped {
       new KinesisSpecContext with WithGetShardIteratorSuccess with WithGetRecordsSuccess {
-        override def shards: util.List[Shard] = util.Arrays.asList(new Shard().withShardId("id"))
+        override def shards: util.List[Shard] = util.Arrays.asList(Shard.builder().shardId("id").build())
 
         override def records = util.Arrays.asList(
-          new Record().withData(ByteString("1").toByteBuffer),
-          new Record().withData(ByteString("2").toByteBuffer)
+          Record.builder().data(SdkBytes.fromUtf8String("1")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("2")).build(),
         )
 
-        val probe = KinesisSource.basic(shardSettings, amazonKinesisAsync).runWith(TestSink.probe)
+        val probe = KinesisSource.basic(shardSettings, kinesisAsyncClient).runWith(TestSink.probe)
 
         probe.request(2)
         probe.expectNext().utf8String shouldEqual "1"
         probe.expectNext().utf8String shouldEqual "2"
-        probe.expectNoMessage(1.second)
+        probe.expectNoMessage(FiniteDuration(1, TimeUnit.SECONDS))
         probe.cancel()
       }
     }
 
     "wait for request before passing downstream" in assertAllStagesStopped {
       new KinesisSpecContext with WithGetShardIteratorSuccess with WithGetRecordsSuccess {
-        override def shards: util.List[Shard] = util.Arrays.asList(new Shard().withShardId("id"))
+        override def shards: util.List[Shard] = util.Arrays.asList(Shard.builder().shardId("id").build())
 
         override def records = util.Arrays.asList(
-          new Record().withData(ByteString("1").toByteBuffer),
-          new Record().withData(ByteString("2").toByteBuffer),
-          new Record().withData(ByteString("3").toByteBuffer),
-          new Record().withData(ByteString("4").toByteBuffer),
-          new Record().withData(ByteString("5").toByteBuffer),
-          new Record().withData(ByteString("6").toByteBuffer)
+          Record.builder().data(SdkBytes.fromUtf8String("1")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("2")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("3")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("4")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("5")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("6")).build()
         )
 
-        val probe = KinesisSource.basic(shardSettings, amazonKinesisAsync).runWith(TestSink.probe)
+        val probe = KinesisSource.basic(shardSettings, kinesisAsyncClient).runWith(TestSink.probe)
 
         probe.request(1)
         probe.expectNext().utf8String shouldEqual "1"
-        probe.expectNoMessage(1.second)
+        probe.expectNoMessage(FiniteDuration(1, TimeUnit.SECONDS))
         probe.requestNext().utf8String shouldEqual "2"
         probe.requestNext().utf8String shouldEqual "3"
         probe.requestNext().utf8String shouldEqual "4"
@@ -108,16 +108,16 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
         )
 
         override def shards: util.List[Shard] =
-          util.Arrays.asList(new Shard().withShardId("1"), new Shard().withShardId("2"))
+          util.Arrays.asList(Shard.builder().shardId("1").build(), Shard.builder().shardId("1").build())
 
         override def records = util.Arrays.asList(
-          new Record().withData(ByteString("1").toByteBuffer),
-          new Record().withData(ByteString("2").toByteBuffer),
-          new Record().withData(ByteString("3").toByteBuffer)
+          Record.builder().data(SdkBytes.fromUtf8String("1")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("2")).build(),
+          Record.builder().data(SdkBytes.fromUtf8String("3")).build()
         )
 
         val probe =
-          KinesisSource.basicMerge(mergeSettings, amazonKinesisAsync).map(_.utf8String).runWith(TestSink.probe)
+          KinesisSource.basicMerge(mergeSettings, kinesisAsyncClient).map(_.utf8String).runWith(TestSink.probe)
 
         probe.request(6)
         probe.expectNextUnordered("1", "1", "2", "2", "3", "3")
@@ -127,9 +127,9 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
 
     "complete stage when next shard iterator is null" in assertAllStagesStopped {
       new KinesisSpecContext with WithGetShardIteratorSuccess with WithGetRecordsSuccess {
-        override def records = util.Arrays.asList(new Record().withData(ByteString("1").toByteBuffer))
+        override def records = util.Arrays.asList(Record.builder().data(SdkBytes.fromUtf8String("1")).build())
 
-        val probe = KinesisSource.basic(shardSettings, amazonKinesisAsync).runWith(TestSink.probe)
+        val probe = KinesisSource.basic(shardSettings, kinesisAsyncClient).runWith(TestSink.probe)
 
         probe.requestNext.utf8String shouldEqual "1"
         nextShardIterator.set(null)
@@ -142,7 +142,7 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
 
     "fail with error when GetStreamRequest fails" in assertAllStagesStopped {
       new KinesisSpecContext with WithGetShardIteratorSuccess with WithGetRecordsFailure {
-        val probe = KinesisSource.basic(shardSettings, amazonKinesisAsync).runWith(TestSink.probe)
+        val probe = KinesisSource.basic(shardSettings, kinesisAsyncClient).runWith(TestSink.probe)
         probe.request(1)
         probe.expectError() shouldBe an[KinesisErrors.GetRecordsError]
         probe.cancel()
@@ -150,8 +150,13 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
     }
   }
 
+  trait MockitoHelper extends MockitoSugar {
+    def doReturn(toBeReturned: Any): Stubber =
+      Mockito.doReturn(toBeReturned, Nil: _*)
+  }
+
   trait KinesisSpecContext {
-    def shards: util.List[Shard] = util.Arrays.asList(new Shard().withShardId("id"))
+    def shards: util.List[Shard] = util.Arrays.asList(Shard.builder().shardId("id").build())
 
     def shardIterator: String = "iterator"
 
@@ -159,63 +164,48 @@ class KinesisSourceSpec extends WordSpecLike with Matchers with KinesisMock {
 
     val nextShardIterator = new AtomicReference[String]("next")
 
-    val describeStreamResult = mock[DescribeStreamResult]
+    val describeStreamResponse = mock[DescribeStreamResponse]
     val streamDescription = mock[StreamDescription]
 
-    when(amazonKinesisAsync.describeStream(anyString())).thenReturn(describeStreamResult)
-    when(describeStreamResult.getStreamDescription).thenReturn(streamDescription)
-    when(streamDescription.getShards).thenReturn(shards)
-    when(streamDescription.getHasMoreShards).thenReturn(false)
+    when(kinesisAsyncClient.describeStream(DescribeStreamRequest.builder().streamName(anyString()).build()))
+      .thenReturn(CompletableFuture.completedFuture(describeStreamResponse))
+    when(describeStreamResponse.streamDescription()).thenReturn(streamDescription)
+    when(streamDescription.shards()).thenReturn(shards)
+    when(streamDescription.hasMoreShards).thenReturn(false)
 
-    val getShardIteratorRequest = new GetShardIteratorRequest
-    val getShardIteratorResult = new GetShardIteratorResult().withShardIterator(shardIterator)
-    val getRecordsRequest = new GetRecordsRequest
+    val getShardIteratorRequest = GetShardIteratorRequest.builder().build()
+    val getShardIteratorResponse = GetShardIteratorResponse.builder().shardIterator(shardIterator).build()
+    val getRecordsRequest = GetRecordsRequest.builder().build()
 
-    def getRecordsResult = new GetRecordsResult().withRecords(records).withNextShardIterator(nextShardIterator.get())
+    def getRecordsResult =
+      GetRecordsResponse.builder().records(records).nextShardIterator(nextShardIterator.get()).build()
 
   }
 
   trait WithGetShardIteratorSuccess { self: KinesisSpecContext =>
-    when(amazonKinesisAsync.getShardIteratorAsync(any(), any())).thenAnswer(new Answer[AnyRef] {
-      override def answer(invocation: InvocationOnMock): AnyRef = {
-        invocation
-          .getArgument[AsyncHandler[GetShardIteratorRequest, GetShardIteratorResult]](1)
-          .onSuccess(getShardIteratorRequest, getShardIteratorResult)
-        CompletableFuture.completedFuture(getShardIteratorResult)
-      }
-    })
+    when(kinesisAsyncClient.getShardIterator(getShardIteratorRequest))
+      .thenReturn(CompletableFuture.completedFuture(getShardIteratorResponse))
   }
 
   trait WithGetShardIteratorFailure { self: KinesisSpecContext =>
-    when(amazonKinesisAsync.getShardIteratorAsync(any(), any())).thenAnswer(new Answer[AnyRef] {
-      override def answer(invocation: InvocationOnMock): AnyRef = {
-        invocation
-          .getArgument[AsyncHandler[GetShardIteratorRequest, GetShardIteratorResult]](1)
-          .onError(new Exception("fail"))
-        CompletableFuture.completedFuture(getShardIteratorResult)
-      }
-    })
+    when(kinesisAsyncClient.getShardIterator(getShardIteratorRequest))
+      .thenAnswer(new Answer[CompletableFuture[GetShardIteratorResponse]] {
+        override def answer(invocation: InvocationOnMock) =
+          CompletableFuture.completedFuture(getShardIteratorResponse)
+      })
   }
 
   trait WithGetRecordsSuccess { self: KinesisSpecContext =>
-    when(amazonKinesisAsync.getRecordsAsync(any(), any())).thenAnswer(new Answer[AnyRef] {
-      override def answer(invocation: InvocationOnMock) = {
-        invocation
-          .getArgument[AsyncHandler[GetRecordsRequest, GetRecordsResult]](1)
-          .onSuccess(getRecordsRequest, getRecordsResult)
+    when(kinesisAsyncClient.getRecords(getRecordsRequest)).thenAnswer(new Answer[AnyRef] {
+      override def answer(invocation: InvocationOnMock): AnyRef =
         CompletableFuture.completedFuture(getRecordsResult)
-      }
     })
   }
 
   trait WithGetRecordsFailure { self: KinesisSpecContext =>
-    when(amazonKinesisAsync.getRecordsAsync(any(), any())).thenAnswer(new Answer[AnyRef] {
-      override def answer(invocation: InvocationOnMock) = {
-        invocation
-          .getArgument[AsyncHandler[GetRecordsRequest, GetRecordsResult]](1)
-          .onError(new Exception("fail"))
+    when(kinesisAsyncClient.getRecords(getRecordsRequest)).thenAnswer(new Answer[AnyRef] {
+      override def answer(invocation: InvocationOnMock): AnyRef =
         CompletableFuture.completedFuture(getRecordsResult)
-      }
     })
   }
 }

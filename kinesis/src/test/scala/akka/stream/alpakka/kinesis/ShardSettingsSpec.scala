@@ -6,7 +6,7 @@ package akka.stream.alpakka.kinesis
 
 import java.time.Instant
 
-import com.amazonaws.services.kinesis.model.ShardIteratorType
+import software.amazon.awssdk.services.kinesis.model.ShardIteratorType
 import org.scalatest.{Matchers, WordSpec}
 
 class ShardSettingsSpec extends WordSpec with Matchers {
@@ -18,7 +18,7 @@ class ShardSettingsSpec extends WordSpec with Matchers {
     }
     "accept a valid timestamp for shard iterator type AT_TIMESTAMP" in {
       noException should be thrownBy baseSettings
-        .withAtTimestamp(Instant.now())
+        .withAttimestamp(Instant.now())
         .withShardIteratorType(ShardIteratorType.AT_TIMESTAMP)
     }
     "require a sequence number for iterator type AT_SEQUENCE_NUMBER" in {

@@ -6,7 +6,7 @@ package akka.stream.alpakka.kinesis
 
 import akka.actor.ActorSystem
 import akka.stream.{ActorMaterializer, Materializer}
-import com.amazonaws.services.kinesis.AmazonKinesisAsync
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
 import org.mockito.Mockito.reset
 import org.scalatest.mockito.MockitoSugar
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, Suite}
@@ -18,10 +18,10 @@ trait KinesisMock extends BeforeAndAfterAll with BeforeAndAfterEach with Mockito
 
   implicit protected val system: ActorSystem = ActorSystem()
   implicit protected val materializer: Materializer = ActorMaterializer()
-  implicit protected val amazonKinesisAsync: AmazonKinesisAsync = mock[AmazonKinesisAsync]
+  implicit protected val kinesisAsyncClient: KinesisAsyncClient = mock[KinesisAsyncClient]
 
   override protected def beforeEach(): Unit =
-    reset(amazonKinesisAsync)
+    reset(kinesisAsyncClient)
 
   override protected def afterAll(): Unit =
     Await.ready(system.terminate(), 5.seconds)

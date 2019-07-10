@@ -10,20 +10,19 @@ import akka.stream.alpakka.kinesis.KinesisErrors.{ErrorPublishingRecords, Failur
 import akka.stream.alpakka.kinesis.KinesisFlowSettings.{Exponential, Linear, RetryBackoffStrategy}
 import akka.stream.stage._
 import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
-import com.amazonaws.handlers.AsyncHandler
-import com.amazonaws.services.kinesis.AmazonKinesisAsync
-import com.amazonaws.services.kinesis.model.{
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient
+import software.amazon.awssdk.services.kinesis.model.{
   PutRecordsRequest,
   PutRecordsRequestEntry,
-  PutRecordsResult,
+  PutRecordsResponse,
   PutRecordsResultEntry
 }
 
 import scala.collection.JavaConverters._
-import scala.collection.mutable
-import scala.collection.immutable
+import scala.collection.{immutable, mutable}
+import scala.compat.java8.FutureConverters._
 import scala.concurrent.duration.FiniteDuration
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -37,7 +36,7 @@ private[kinesis] final class KinesisFlowStage[T](
     maxRetries: Int,
     backoffStrategy: RetryBackoffStrategy,
     retryInitialTimeout: FiniteDuration
-)(implicit kinesisClient: AmazonKinesisAsync)
+)(implicit kinesisClient: KinesisAsyncClient)
     extends GraphStage[
       FlowShape[immutable.Seq[(PutRecordsRequestEntry, T)], Future[immutable.Seq[(PutRecordsResultEntry, T)]]]
     ] {
@@ -47,6 +46,8 @@ private[kinesis] final class KinesisFlowStage[T](
   private val in = Inlet[immutable.Seq[(PutRecordsRequestEntry, T)]]("KinesisFlowStage.in")
   private val out = Outlet[Future[immutable.Seq[(PutRecordsResultEntry, T)]]]("KinesisFlowStage.out")
   override val shape = FlowShape(in, out)
+
+  implicit val ec = ExecutionContext.global
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
     new TimerGraphStageLogic(shape) with StageLogging with InHandler with OutHandler {
@@ -76,21 +77,23 @@ private[kinesis] final class KinesisFlowStage[T](
 
         val p = Promise[immutable.Seq[(PutRecordsResultEntry, T)]]
 
-        val request = new PutRecordsRequest()
-          .withStreamName(streamName)
-          .withRecords(job.records.map(_._1).asJavaCollection)
+        val request = PutRecordsRequest
+          .builder()
+          .streamName(streamName)
+          .records(job.records.map(_._1).asJavaCollection)
+          .build()
 
-        val handler = new AsyncHandler[PutRecordsRequest, PutRecordsResult] {
-          override def onError(exception: Exception): Unit =
-            p.failure(FailurePublishingRecords(exception))
+        val putRecordsResponse: Future[PutRecordsResponse] =
+          kinesisClient.putRecords(request).toScala
 
-          override def onSuccess(request: PutRecordsRequest, result: PutRecordsResult): Unit = {
-            val correlatedRequestResult = result.getRecords.asScala.zip(job.records).toList
-            if (result.getFailedRecordCount > 0) {
+        putRecordsResponse.onComplete {
+          case Success(response) =>
+            val correlatedRequestResponse = response.records.asScala.zip(job.records).toList
+            if (response.failedRecordCount > 0) {
               val result = Result(job.attempt,
-                                  correlatedRequestResult
+                                  correlatedRequestResponse
                                     .filter {
-                                      case (res, _) => res.getErrorCode != null
+                                      case (res, _) => res.errorCode != null
                                     })
               if (job.attempt > maxRetries) failAfterResendsCallback.invoke(result)
               else resendCallback.invoke(result)
@@ -98,15 +101,14 @@ private[kinesis] final class KinesisFlowStage[T](
               putRecordsSuccessfulCallback.invoke(NotUsed)
             }
             p.success(
-              correlatedRequestResult
-                .filter {
-                  case (res, _) => res.getErrorCode == null
-                }
+              correlatedRequestResponse
+                .filter { case (res, _) => res.errorCode == null }
                 .map { case (res, (_, ctx)) => (res, ctx) }
             )
-          }
+          case Failure(throwable) =>
+            p.failure(FailurePublishingRecords(new Exception(throwable)))
+
         }
-        kinesisClient.putRecordsAsync(request, handler)
 
         p.future
       }

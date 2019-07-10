@@ -4,7 +4,7 @@
 
 package akka.stream.alpakka.kinesis
 
-import com.amazonaws.services.kinesis.model.PutRecordsResultEntry
+import software.amazon.awssdk.services.kinesis.model.PutRecordsResultEntry
 
 import scala.util.control.NoStackTrace
 
